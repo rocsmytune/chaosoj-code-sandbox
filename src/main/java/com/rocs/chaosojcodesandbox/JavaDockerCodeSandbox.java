@@ -37,7 +37,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
     private static final String GLOBAL_CODE_DIR_NAME = "tmpCode";
 
     private static final String GLOBAL_JAVA_CLASS_NAME = "Main.java";
-    private static final long TIME_OUT = 5000L;
+    private static final long TIME_OUT = 15L;
     private static final String SECURITY_MANAGER_PATH = "D:\\coding\\projects\\chaosoj-code-sandbox\\src\\main\\resources\\security";
 
     private static final String SECURITY_MANAGER_CLASS_NAME = "MySecurityManager";
@@ -130,7 +130,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
         hostConfig.withMemorySwap(0L);
         //cpu内核限制
         hostConfig.withCpuCount(1L);
-        //替换为安全管理配置文件
+        //TODO: 替换为安全管理配置文件
 //        hostConfig.withSecurityOpts(Arrays.asList("seccomp=安全管理配置字符串"));
         hostConfig.setBinds(new Bind(userCodeParentPath, new Volume("/app")));
 
@@ -139,7 +139,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
                 //Docker限制网络的使用
                 .withNetworkDisabled(true)
                 //禁止用户对root根目录写文件
-                .withReadonlyRootfs(true)
+//                .withReadonlyRootfs(true)
                 .withAttachStdin(true)
                 .withAttachStderr(true)
                 .withAttachStdout(true)
@@ -232,7 +232,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
                 stopWatch.start();
                 dockerClient.execStartCmd(execId)
                         .exec(execStartResultCallback)
-                        .awaitCompletion(TIME_OUT, TimeUnit.MICROSECONDS);
+                        .awaitCompletion(TIME_OUT, TimeUnit.SECONDS);
                 stopWatch.stop();
                 time = stopWatch.getLastTaskTimeMillis();
                 statsCmd.close();
