@@ -5,7 +5,6 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.dfa.WordTree;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
 import com.github.dockerjava.api.command.*;
@@ -17,6 +16,7 @@ import com.rocs.chaosojcodesandbox.model.ExecuteCodeResponse;
 import com.rocs.chaosojcodesandbox.model.ExecuteMessage;
 import com.rocs.chaosojcodesandbox.model.JudgeInfo;
 import com.rocs.chaosojcodesandbox.utils.ProcessUtils;
+import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
@@ -32,17 +32,10 @@ import java.util.concurrent.TimeUnit;
  * 核心思路： 用程序代替人工
  *
  */
-public class JavaDockerCodeSandbox implements CodeSandbox{
+@Component
+public class JavaDockerCodeSandbox extends JavaCodeSandboxTemplate {
 
-    private static final String GLOBAL_CODE_DIR_NAME = "tmpCode";
-
-    private static final String GLOBAL_JAVA_CLASS_NAME = "Main.java";
-    private static final long TIME_OUT = 15L;
-    private static final String SECURITY_MANAGER_PATH = "D:\\coding\\projects\\chaosoj-code-sandbox\\src\\main\\resources\\security";
-
-    private static final String SECURITY_MANAGER_CLASS_NAME = "MySecurityManager";
-
-    private static final List<String> blackList = Arrays.asList("Files", "exec");
+    private static final long TIME_OUT = 5000L;
 
     private static final Boolean FIRST_INIT = true;
 
@@ -59,39 +52,16 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
         System.out.println(executeCodeResponse);
     }
 
+    /***
+     * 自定义的docker实现runFile()
+     * @param userCodeFile
+     * @param inputList
+     * @return
+     */
     @Override
-    public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
-//        System.setSecurityManager(new DenySecurityManager());
-
-        List<String> inputList = executeCodeRequest.getInputList();
-        String code = executeCodeRequest.getCode();
-        String language = executeCodeRequest.getLanguage();
-
-//        1. 把用户的代码保存为文件
-
-        String userDir = System.getProperty("user.dir");
-        String globalCodePathName = userDir + File.separator + GLOBAL_CODE_DIR_NAME;
-        // 判断全局代码目录是否存在，没有则新建
-        if (!FileUtil.exist(globalCodePathName)) {
-            FileUtil.mkdir(globalCodePathName);
-        }
-
-        // 把用户的代码隔离存放
-        String userCodeParentPath = globalCodePathName + File.separator + UUID.randomUUID();
-        String userCodePath = userCodeParentPath + File.separator + GLOBAL_JAVA_CLASS_NAME;
-        File userCodeFile = FileUtil.writeString(code, userCodePath, StandardCharsets.UTF_8);
-
-//        2. 编译代码，得到 class 文件
-        String compileCmd = String.format("javac -encoding utf-8 %s", userCodeFile.getAbsolutePath());
-        try {
-            Process compileProcess = Runtime.getRuntime().exec(compileCmd);
-            ExecuteMessage executeMessage = ProcessUtils.runProcessAndGetMessage(compileProcess, "编译");
-            System.out.println(executeMessage);
-        } catch (Exception e) {
-            return getErrorResponse(e);
-        }
-
+    public List<ExecuteMessage> runFile(File userCodeFile, List<String> inputList) {
         // 3. 创建容器，把文件复制到容器内
+        String userCodeParentPath = userCodeFile.getParentFile().getAbsolutePath();
         // 获取默认的 Docker Client
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
 
@@ -139,7 +109,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
                 //Docker限制网络的使用
                 .withNetworkDisabled(true)
                 //禁止用户对root根目录写文件
-//                .withReadonlyRootfs(true)
+                .withReadonlyRootfs(true)
                 .withAttachStdin(true)
                 .withAttachStderr(true)
                 .withAttachStdout(true)
@@ -189,8 +159,10 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
                     if (StreamType.STDERR.equals(streamType)) {
                         errorMessage[0] = new String(frame.getPayload());
                         System.out.println("输出错误结果：" + errorMessage[0]);
+
                     } else {
-                        message[0] = new String(frame.getPayload());
+                        String temp = new String(frame.getPayload()).trim();
+                        message[0] = temp;
                         System.out.println("输出结果：" + message[0]);
                     }
                     super.onNext(frame);
@@ -203,7 +175,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
             ResultCallback<Statistics> statisticsResultCallback = statsCmd.exec(new ResultCallback<Statistics>() {
                 @Override
                 public void onNext(Statistics statistics) {
-                    System.out.println("内存占用：" + statistics.getMemoryStats().getUsage());
+//                    System.out.println("内存占用：" + statistics.getMemoryStats().getUsage());
                     maxMemory[0] = Math.max(statistics.getMemoryStats().getUsage(), maxMemory[0]);
                 }
 
@@ -232,7 +204,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
                 stopWatch.start();
                 dockerClient.execStartCmd(execId)
                         .exec(execStartResultCallback)
-                        .awaitCompletion(TIME_OUT, TimeUnit.SECONDS);
+                        .awaitCompletion(TIME_OUT, TimeUnit.MILLISECONDS);
                 stopWatch.stop();
                 time = stopWatch.getLastTaskTimeMillis();
                 statsCmd.close();
@@ -246,59 +218,7 @@ public class JavaDockerCodeSandbox implements CodeSandbox{
             executeMessage.setMemory(maxMemory[0]);
             executeMessageList.add(executeMessage);
         }
-        // 4、封装结果，跟原生实现方式完全一致
-        ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
-        List<String> outputList = new ArrayList<>();
-        // 取用时最大值，便于判断是否超时
-        long maxTime = 0;
-        for (ExecuteMessage executeMessage : executeMessageList) {
-            String errorMessage = executeMessage.getErrorMessage();
-            if (StrUtil.isNotBlank(errorMessage)) {
-                executeCodeResponse.setMessage(errorMessage);
-                // 用户提交的代码执行中存在错误
-                executeCodeResponse.setStatus(3);
-                break;
-            }
-            outputList.add(executeMessage.getMessage());
-            Long time = executeMessage.getTime();
-            if (time != null) {
-                maxTime = Math.max(maxTime, time);
-            }
-        }
-        // 正常运行完成
-        if (outputList.size() == executeMessageList.size()) {
-            executeCodeResponse.setStatus(1);
-        }
-        executeCodeResponse.setOutputList(outputList);
-        JudgeInfo judgeInfo = new JudgeInfo();
-        judgeInfo.setTime(maxTime);
-        // 要借助第三方库来获取内存占用，非常麻烦，此处不做实现
-//        judgeInfo.setMemory();
-
-        executeCodeResponse.setJudgeInfo(judgeInfo);
-
-//        5. 文件清理
-        if (userCodeFile.getParentFile() != null) {
-            boolean del = FileUtil.del(userCodeParentPath);
-            System.out.println("删除" + (del ? "成功" : "失败"));
-        }
-        return executeCodeResponse;
-    }
-
-    /**
-     * 获取错误响应
-     *
-     * @param e
-     * @return
-     */
-    private ExecuteCodeResponse getErrorResponse(Throwable e) {
-        ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
-        executeCodeResponse.setOutputList(new ArrayList<>());
-        executeCodeResponse.setMessage(e.getMessage());
-        // 表示代码沙箱错误
-        executeCodeResponse.setStatus(2);
-        executeCodeResponse.setJudgeInfo(new JudgeInfo());
-        return executeCodeResponse;
+        return executeMessageList;
     }
 }
 

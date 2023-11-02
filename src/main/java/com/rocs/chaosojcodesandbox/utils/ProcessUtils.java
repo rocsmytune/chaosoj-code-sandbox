@@ -37,6 +37,7 @@ public class ProcessUtils {
                 while ((compileOutputLine = bufferedReader.readLine()) != null) {
                     outputStrList.add(compileOutputLine);
                 }
+//                executeMessage.setMessage(StringUtils.join(outputStrList, "\n"));
                 executeMessage.setMessage(StringUtils.join(outputStrList, "\n"));
             } else {
                 // 异常退出
